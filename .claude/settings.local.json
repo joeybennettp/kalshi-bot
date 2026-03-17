@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(py --version)",
+      "Bash(node --version)",
+      "Bash(npm --version)",
+      "Bash(npm init -y)",
+      "Bash(npm install typescript @types/node dotenv better-sqlite3 @types/better-sqlite3 --save)",
+      "Bash(npm install vitest --save-dev)",
+      "Bash(npx tsc --init)",
+      "Bash(npm install tsx --save-dev)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(npx vitest run)",
+      "WebFetch(domain:docs.kalshi.com)",
+      "Bash(npx tsx src/test_connection.ts)",
+      "Bash(npx tsx src/debug_api.ts)",
+      "Bash(npx tsx -e \":*)",
+      "Bash(npx tsx -e \"import ''dotenv/config''; import { kalshiGet } from ''./src/kalshi_api.js''; async function main\\(\\) { const d = await kalshiGet\\(''/events'', { status: ''open'', limit: ''200'' }\\); const events = d.events ?? []; console.log\\(''Events: '' + events.length\\); for \\(const e of events\\) { if \\(\\(e.category || ''''\\) === ''Crypto''\\) { console.log\\(e.event_ticker + '' | '' + e.title\\); } } } main\\(\\).catch\\(e => console.error\\(e.message\\)\\);\")",
+      "Bash(npx tsx src/discover_series.ts)",
+      "Bash(npx tsx src/test_pipeline.ts)",
+      "Bash(npx tsx src/main.ts)",
+      "Bash(taskkill //F //IM \"node.exe\" //T)",
+      "Bash(npm install -g pm2)",
+      "Bash(ls \"C:/Users/joeyb/Desktop/Projects/kalshi_bot/node_modules/.bin/tsx\"*)"
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+# Credentials
+.env
+*.pem
+
+# Database
+trades.db
+trades.db-journal
+trades.db-wal
+
+# Logs
+logs/
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
