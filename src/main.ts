@@ -89,27 +89,33 @@ async function runCycle(
 
   // Safety: consecutive losses (Rule 8) — cooldown instead of halt to prevent PM2 restart loop
   if (getConsecutiveLosses(dbPath) >= 3) {
-    // Check if lockfile exists with a timestamp
     if (fs.existsSync(MODEL_REVIEW_LOCKFILE)) {
-      const lockTime = parseInt(fs.readFileSync(MODEL_REVIEW_LOCKFILE, "utf-8").trim(), 10);
-      const elapsed = Date.now() - lockTime;
-      if (elapsed < MODEL_REVIEW_COOLDOWN_MS) {
-        const remaining = Math.ceil((MODEL_REVIEW_COOLDOWN_MS - elapsed) / 60_000);
-        console.log(`  [PAUSED] MODEL_REVIEW cooldown: ${remaining} min remaining. Skipping trading.`);
-        return { shouldContinue: true }; // Stay alive, just skip trading
+      const lockContent = fs.readFileSync(MODEL_REVIEW_LOCKFILE, "utf-8").trim();
+
+      // "RESUMED" means cooldown already served — allow trading until streak breaks
+      if (lockContent === "RESUMED") {
+        // Keep trading — the streak will break when the next trade wins
+      } else {
+        const lockTime = parseInt(lockContent, 10);
+        const elapsed = Date.now() - lockTime;
+        if (elapsed < MODEL_REVIEW_COOLDOWN_MS) {
+          const remaining = Math.ceil((MODEL_REVIEW_COOLDOWN_MS - elapsed) / 60_000);
+          console.log(`  [PAUSED] MODEL_REVIEW cooldown: ${remaining} min remaining. Skipping trading.`);
+          return { shouldContinue: true };
+        }
+        // Cooldown expired — mark as resumed so we don't re-pause
+        fs.writeFileSync(MODEL_REVIEW_LOCKFILE, "RESUMED");
+        console.log("  MODEL_REVIEW cooldown expired. Resuming trading.");
       }
-      // Cooldown expired — delete lockfile, allow trading to resume
-      fs.unlinkSync(MODEL_REVIEW_LOCKFILE);
-      console.log("  MODEL_REVIEW cooldown expired. Resuming trading.");
     } else {
-      // First time hitting 3 losses — create lockfile
+      // First time hitting 3 losses — create lockfile with timestamp
       fs.writeFileSync(MODEL_REVIEW_LOCKFILE, Date.now().toString());
       logEvent("MODEL_REVIEW", { bankroll, cooldown_minutes: MODEL_REVIEW_COOLDOWN_MS / 60_000 }, dbPath);
       console.log(`\n[MODEL_REVIEW] 3 consecutive losses — pausing trading for ${MODEL_REVIEW_COOLDOWN_MS / 60_000} minutes.`);
-      return { shouldContinue: true }; // Stay alive, don't halt
+      return { shouldContinue: true };
     }
   } else {
-    // No consecutive losses — clear lockfile if it exists
+    // Consecutive losses < 3 — clear lockfile if it exists (streak broken)
     if (fs.existsSync(MODEL_REVIEW_LOCKFILE)) {
       fs.unlinkSync(MODEL_REVIEW_LOCKFILE);
     }
