@@ -257,18 +257,8 @@ export async function evaluateCandidates(
   const dbPath = options?.dbPath;
   const priceDataMap = options?.priceData ?? new Map<string, PriceData>();
 
-  // Rule 8: check consecutive losses
-  const consecutiveLosses = getConsecutiveLosses(dbPath);
-  if (consecutiveLosses >= 3) {
-    return {
-      signals: [],
-      rejected: candidates.map((c) => ({
-        marketId: c.marketId,
-        marketTitle: c.marketTitle,
-        reason: "MODEL_REVIEW: 3 consecutive losses",
-      })),
-    };
-  }
+  // Rule 8: consecutive losses check is handled by main.ts cooldown logic.
+  // If we reach this point, main.ts has already approved trading for this cycle.
 
   // Rule 5: get open positions for correlation check
   const openPositions = getOpenPositions(dbPath);

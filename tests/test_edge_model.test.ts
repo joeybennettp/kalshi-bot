@@ -126,7 +126,7 @@ describe("checkCorrelation", () => {
 });
 
 describe("evaluateCandidates", () => {
-  it("rejects all on 3 consecutive losses (Rule 8)", async () => {
+  it("evaluates normally even with 3 consecutive losses (Rule 8 handled by main.ts)", async () => {
     for (let i = 0; i < 3; i++) {
       logTrade({
         session_id: "test",
@@ -146,10 +146,13 @@ describe("evaluateCandidates", () => {
       }, tmpDb);
     }
 
+    // Edge model no longer blocks — main.ts cooldown handles Rule 8
     const { signals, rejected } = await evaluateCandidates([makeCandidate()], 0.05, { dbPath: tmpDb });
-    expect(signals).toHaveLength(0);
-    expect(rejected).toHaveLength(1);
-    expect(rejected[0]!.reason).toContain("MODEL_REVIEW");
+    const total = signals.length + rejected.length;
+    expect(total).toBe(1);
+    for (const r of rejected) {
+      expect(r.reason).not.toContain("MODEL_REVIEW");
+    }
   });
 
   it("proceeds normally with no losses", async () => {
