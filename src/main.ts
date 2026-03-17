@@ -18,6 +18,8 @@ import { executeTrade, cancelRestingOrders } from "./executor.js";
 import { kalshiGet } from "./kalshi_api.js";
 import { fetchAllPriceData } from "./price_feeds.js";
 import { getUniqueBinanceSymbols } from "./market_registry.js";
+import { monitorPositions } from "./position_monitor.js";
+import { checkResolutions } from "./resolution_checker.js";
 
 const CYCLE_INTERVAL_MS = 30_000; // 30 seconds
 const BANKROLL_FLOOR = 10.0;
@@ -77,7 +79,23 @@ async function runCycle(
   const cancelledCount = await cancelRestingOrders(dbPath);
   if (cancelledCount > 0) {
     console.log(`  Cancelled ${cancelledCount} stale resting order(s)`);
-    // Re-fetch bankroll since cancelled orders free up funds
+    bankroll = await getCurrentBankroll();
+  }
+
+  // Step 0.25: Check resolutions — clear settled markets from DB
+  const resolutions = await checkResolutions(bankroll, dbPath);
+  if (resolutions.resolved > 0) {
+    const pnlSign = resolutions.totalPnl >= 0 ? "+" : "";
+    console.log(
+      `  Resolved ${resolutions.resolved} market(s): ${resolutions.wins}W/${resolutions.losses}L (${pnlSign}$${resolutions.totalPnl.toFixed(2)})`,
+    );
+    bankroll = await getCurrentBankroll();
+  }
+
+  // Step 0.5: Monitor positions — sell profitable ones
+  const closedCount = await monitorPositions(sessionId, bankroll, dbPath);
+  if (closedCount > 0) {
+    console.log(`  Closed ${closedCount} profitable position(s)`);
     bankroll = await getCurrentBankroll();
   }
 
@@ -146,7 +164,18 @@ async function runCycle(
   }
 
   if (signals.length === 0) {
-    console.log(`  No edge found. Rejected: ${rejected.length}`);
+    // Summarize rejection reasons
+    const reasonCounts = new Map<string, number>();
+    for (const r of rejected) {
+      // Group by reason prefix (before any parenthetical details)
+      const key = r.reason.replace(/\s*\(.*\)$/, "");
+      reasonCounts.set(key, (reasonCounts.get(key) ?? 0) + 1);
+    }
+    const reasonSummary = [...reasonCounts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([reason, count]) => `${reason}:${count}`)
+      .join(" ");
+    console.log(`  No edge found. Rejected: ${rejected.length} [${reasonSummary}]`);
     return { shouldContinue: true };
   }
 

@@ -110,11 +110,21 @@ async function scanRegisteredSeries(): Promise<CandidateMarket[]> {
 
       const events = (data["events"] ?? []) as Record<string, unknown>[];
 
+      const now = Date.now();
+      const maxClose = now + MAX_RESOLUTION_HOURS * 60 * 60 * 1000;
+
       for (const e of events) {
         const kalshiCategory = (e["category"] as string) ?? "unknown";
         const markets = (e["markets"] ?? []) as Record<string, unknown>[];
 
         for (const m of markets) {
+          // Enforce 48-hour resolution window
+          const closeStr = (m["close_time"] as string) ?? "";
+          if (closeStr) {
+            const closeTime = new Date(closeStr).getTime();
+            if (!isNaN(closeTime) && (closeTime > maxClose || closeTime < now)) continue;
+          }
+
           const c = parseMarket(m, kalshiCategory, config);
           if (c) candidates.push(c);
         }

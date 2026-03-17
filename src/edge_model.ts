@@ -7,7 +7,7 @@
  *   - sports → sports edge (stale liquidity, momentum, odds filter)
  */
 
-import { getConsecutiveLosses, getOpenPositions, hasRecentLoss, type TradeRecord } from "./logger.js";
+import { getConsecutiveLosses, getOpenPositions, hasRecentLoss, hasRecentFailedOrder, type TradeRecord } from "./logger.js";
 import type { CandidateMarket } from "./scanner.js";
 import type { PriceData } from "./price_feeds.js";
 import { analyzeTrend } from "./trend_analysis.js";
@@ -92,22 +92,23 @@ export function checkCorrelation(
 
 /**
  * Evaluate a crypto market using multi-indicator trend analysis.
+ * Returns a signal or a rejection reason string.
  */
 function evaluateCryptoTrend(
   candidate: CandidateMarket,
   edgeFloor: number,
   priceData: PriceData,
   timeframe: "15m" | "1h",
-): TradeSignal | null {
+): TradeSignal | string {
   const trend = analyzeTrend(priceData, timeframe);
 
-  if (trend.direction === "NEUTRAL") return null;
+  if (trend.direction === "NEUTRAL") return `TREND_NEUTRAL (pUp=${(trend.pUp * 100).toFixed(1)}%)`;
 
   const kalshiImpliedUp = candidate.yesPrice;
 
   // Skip extreme prices — our model can't reliably estimate probabilities
   // when the market is near certainty (the market has information we don't)
-  if (kalshiImpliedUp > 0.85 || kalshiImpliedUp < 0.15) return null;
+  if (kalshiImpliedUp > 0.85 || kalshiImpliedUp < 0.15) return `EXTREME_PRICE (yes=${(kalshiImpliedUp * 100).toFixed(0)}%)`;
 
   let direction: "YES" | "NO";
   let pEstimate: number;
@@ -121,11 +122,12 @@ function evaluateCryptoTrend(
     direction = "NO";
     pEstimate = trend.pUp;
   } else {
-    return null; // no meaningful divergence
+    const gap = Math.abs(trend.pUp - kalshiImpliedUp);
+    return `NO_DIVERGENCE (trend=${(trend.pUp * 100).toFixed(1)}% vs kalshi=${(kalshiImpliedUp * 100).toFixed(1)}%, gap=${(gap * 100).toFixed(1)}%<4%)`;
   }
 
   const ev = computeEv(pEstimate, candidate.yesPrice, direction);
-  if (ev < edgeFloor) return null;
+  if (ev < edgeFloor) return `EV_BELOW_FLOOR (ev=${(ev * 100).toFixed(2)}c < floor=${(edgeFloor * 100).toFixed(0)}c)`;
 
   const coinLabel = candidate.binanceSymbol?.replace("USDT", "") ?? "CRYPTO";
   const rationale =
@@ -290,47 +292,82 @@ export async function evaluateCandidates(
       continue;
     }
 
+    // Skip markets that recently failed to fill (5-minute cooldown)
+    if (hasRecentFailedOrder(candidate.marketId, 300_000, dbPath)) {
+      rejected.push({
+        marketId: candidate.marketId,
+        marketTitle: candidate.marketTitle,
+        reason: "RECENT_FILL_FAILURE",
+      });
+      continue;
+    }
+
     let foundEdge = false;
+    let rejectReason = "";
+
+    // Skip non-directional crypto markets (range markets)
+    if ((candidate.marketCategory === "crypto_15m" || candidate.marketCategory === "crypto_hourly") && !candidate.directional) {
+      rejected.push({
+        marketId: candidate.marketId,
+        marketTitle: candidate.marketTitle,
+        reason: "RANGE_MARKET_SKIPPED",
+      });
+      continue;
+    }
 
     // Route by category
     if (candidate.marketCategory === "crypto_15m" && candidate.directional) {
       const symbol = candidate.binanceSymbol;
-      if (symbol) {
+      if (!symbol) {
+        rejectReason = "NO_BINANCE_SYMBOL";
+      } else {
         const pd = priceDataMap.get(symbol);
-        if (pd) {
-          const signal = evaluateCryptoTrend(candidate, edgeFloor, pd, "15m");
-          if (signal) { signals.push(signal); foundEdge = true; }
+        if (!pd) {
+          rejectReason = `NO_PRICE_DATA (${symbol})`;
+        } else {
+          const result = evaluateCryptoTrend(candidate, edgeFloor, pd, "15m");
+          if (typeof result === "string") {
+            rejectReason = result;
+          } else {
+            signals.push(result); foundEdge = true;
+          }
         }
       }
     } else if (candidate.marketCategory === "crypto_hourly" && candidate.directional) {
       const symbol = candidate.binanceSymbol;
-      if (symbol) {
+      if (!symbol) {
+        rejectReason = "NO_BINANCE_SYMBOL";
+      } else {
         const pd = priceDataMap.get(symbol);
-        if (pd) {
-          const signal = evaluateCryptoTrend(candidate, edgeFloor, pd, "1h");
-          if (signal) { signals.push(signal); foundEdge = true; }
+        if (!pd) {
+          rejectReason = `NO_PRICE_DATA (${symbol})`;
+        } else {
+          const result = evaluateCryptoTrend(candidate, edgeFloor, pd, "1h");
+          if (typeof result === "string") {
+            rejectReason = result;
+          } else {
+            signals.push(result); foundEdge = true;
+          }
         }
       }
     } else if (candidate.marketCategory === "sports") {
       // Check odds range
       if (!isWithinOddsRange(candidate.yesPrice, candidate.noPrice)) {
-        rejected.push({
-          marketId: candidate.marketId,
-          marketTitle: candidate.marketTitle,
-          reason: "OUTSIDE_ODDS_RANGE",
-        });
-        continue;
+        rejectReason = `OUTSIDE_ODDS_RANGE (yes=${(candidate.yesPrice * 100).toFixed(0)}c)`;
+      } else {
+        const signal = evaluateSportsCandidate(candidate, edgeFloor);
+        if (signal) { signals.push(signal); foundEdge = true; }
+        else { rejectReason = "SPORTS_NO_EDGE"; }
       }
-      const signal = evaluateSportsCandidate(candidate, edgeFloor);
-      if (signal) { signals.push(signal); foundEdge = true; }
-    }
-
-    // Fallback: Polymarket arbitrage for financial and unmatched markets
-    if (!foundEdge && candidate.marketCategory === "financial_hourly") {
+    } else if (candidate.marketCategory === "financial_hourly") {
+      // Polymarket arbitrage
       const polyProb = await fetchPolymarketOdds(candidate.marketTitle);
-      if (polyProb != null) {
+      if (polyProb == null) {
+        rejectReason = "NO_POLYMARKET_MATCH";
+      } else {
         const signal = evaluateArbitrage(candidate, edgeFloor, polyProb);
         if (signal) { signals.push(signal); foundEdge = true; }
+        else { rejectReason = `ARB_SPREAD_TOO_SMALL (poly=${(polyProb * 100).toFixed(0)}% vs kalshi=${(candidate.yesPrice * 100).toFixed(0)}%)`; }
       }
     }
 
@@ -338,7 +375,7 @@ export async function evaluateCandidates(
       rejected.push({
         marketId: candidate.marketId,
         marketTitle: candidate.marketTitle,
-        reason: "NO_EDGE_FOUND",
+        reason: rejectReason || "NO_EDGE_FOUND",
       });
     }
   }

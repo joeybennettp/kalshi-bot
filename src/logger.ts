@@ -244,6 +244,25 @@ export function hasRecentLoss(marketTitle: string, cooldownMs: number = 900_000,
   }
 }
 
+/**
+ * Check if we recently failed to fill an order on this exact market.
+ * Prevents spamming the same illiquid market every cycle.
+ */
+export function hasRecentFailedOrder(marketId: string, cooldownMs: number = 300_000, dbPath?: string): boolean {
+  const db = getDb(dbPath);
+  try {
+    const cutoff = new Date(Date.now() - cooldownMs).toISOString();
+    const row = db
+      .prepare(
+        "SELECT COUNT(*) as cnt FROM trades WHERE market_id = ? AND status = 'FAILED' AND reject_reason LIKE '%RESTING%' AND timestamp > ?",
+      )
+      .get(marketId, cutoff) as { cnt: number };
+    return row.cnt > 0;
+  } finally {
+    db.close();
+  }
+}
+
 export function getSessionTrades(sessionId: string, dbPath?: string): TradeRecord[] {
   const db = getDb(dbPath);
   try {

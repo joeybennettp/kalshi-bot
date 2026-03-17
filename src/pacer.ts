@@ -56,7 +56,7 @@ export function computePace(
 
   if (paceRatio < 0.85) {
     paceStatus = "BEHIND";
-    edgeFloor = 0.08; // Rule 2: tighten, never loosen
+    edgeFloor = 0.05; // Same as on-pace — don't over-tighten
   } else if (paceRatio > 1.15) {
     paceStatus = "AHEAD";
     edgeFloor = 0.04;

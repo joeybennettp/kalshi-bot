@@ -10,6 +10,7 @@ import type { SizedTrade } from "./sizer.js";
 
 const FILL_DEVIATION_THRESHOLD = 0.1;
 const RESTING_ORDER_TIMEOUT_MS = 60_000; // Cancel unfilled orders after 60s
+const PRICE_BUFFER_CENTS = 2; // Pay up to 2c more than scanned ask to ensure fill
 
 function askUser(question: string): Promise<string> {
   const rl = readline.createInterface({
@@ -122,9 +123,9 @@ export async function executeTrade(
     };
 
     if (trade.direction === "YES") {
-      orderPayload["yes_price"] = Math.round(trade.marketPrice * 100);
+      orderPayload["yes_price"] = Math.min(99, Math.round(trade.marketPrice * 100) + PRICE_BUFFER_CENTS);
     } else {
-      orderPayload["no_price"] = Math.round((1 - trade.marketPrice) * 100);
+      orderPayload["no_price"] = Math.min(99, Math.round((1 - trade.marketPrice) * 100) + PRICE_BUFFER_CENTS);
     }
 
     const postFn = options?._apiOverride ?? kalshiPost;
@@ -135,8 +136,34 @@ export async function executeTrade(
     const orderId = (order["order_id"] as string) ?? "";
     const orderStatus = (order["status"] as string) ?? "";
 
-    // If order is resting (not filled), don't count it as executed
-    if (orderStatus === "resting") {
+    // If order is resting, wait briefly and re-check for fill
+    if (orderStatus === "resting" && orderId) {
+      const getFn = kalshiGet;
+      // Wait 5 seconds, then check if it filled
+      await new Promise((r) => setTimeout(r, 5000));
+      try {
+        const check = await getFn(`/portfolio/orders/${orderId}`);
+        const updated = (check["order"] ?? check) as Record<string, unknown>;
+        const updatedStatus = (updated["status"] as string) ?? "resting";
+        if (updatedStatus === "resting") {
+          // Still unfilled — cancel and mark failed
+          try { await kalshiDelete(`/portfolio/orders/${orderId}`); } catch {}
+          updateTrade(tradeId, { status: "FAILED", reject_reason: "ORDER_RESTING_UNFILLED" }, dbPath);
+          return { tradeId, status: "FAILED", orderId, error: "Order resting (unfilled after 5s)" };
+        }
+        // Order filled or partially filled — continue to fill processing below
+        const updatedAvgPrice = (updated["avg_price"] as number) ?? 0;
+        if (updatedAvgPrice > 0) {
+          fillPrice = typeof updatedAvgPrice === "number" && updatedAvgPrice > 1
+            ? updatedAvgPrice / 100
+            : updatedAvgPrice;
+        }
+      } catch {
+        // Can't check order — mark failed to be safe
+        updateTrade(tradeId, { status: "FAILED", reject_reason: "ORDER_STATUS_CHECK_FAILED" }, dbPath);
+        return { tradeId, status: "FAILED", orderId, error: "Could not verify order status" };
+      }
+    } else if (orderStatus === "resting") {
       updateTrade(tradeId, { status: "FAILED", reject_reason: "ORDER_RESTING_UNFILLED" }, dbPath);
       return { tradeId, status: "FAILED", orderId, error: "Order resting (unfilled)" };
     }
