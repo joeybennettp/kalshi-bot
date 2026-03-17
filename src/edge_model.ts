@@ -67,16 +67,21 @@ export function checkCorrelation(
   openPositions: TradeRecord[],
 ): boolean {
   for (const pos of openPositions) {
-    if (pos.market_id === marketId) return true;
+    // Same market = allow re-entry (add to position if edge grows)
+    if (pos.market_id === marketId) continue;
 
-    const stopWords = new Set([
+    // Words to ignore: stop words + common market structure words
+    const ignoreWords = new Set([
       "the", "a", "an", "will", "be", "to", "in", "of", "at", "on", "is",
+      "price", "up", "down", "above", "below", "next", "mins", "minutes",
+      "hour", "hours", "first", "half", "winner", "or", "more", "less",
+      "higher", "lower", "by", "end", "close", "open", "than", "and",
     ]);
     const posWords = new Set(
-      pos.market_title.toLowerCase().split(/\s+/).filter((w) => !stopWords.has(w)),
+      pos.market_title.toLowerCase().split(/\s+/).filter((w) => !ignoreWords.has(w) && w.length > 2),
     );
     const newWords = new Set(
-      marketTitle.toLowerCase().split(/\s+/).filter((w) => !stopWords.has(w)),
+      marketTitle.toLowerCase().split(/\s+/).filter((w) => !ignoreWords.has(w) && w.length > 2),
     );
 
     let overlap = 0;

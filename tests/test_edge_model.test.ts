@@ -100,9 +100,9 @@ describe("computeEv", () => {
 });
 
 describe("checkCorrelation", () => {
-  it("detects same market_id", () => {
+  it("allows same market_id re-entry", () => {
     const positions = [{ market_id: "FED-HOLD", market_title: "Will Fed hold rates?" }] as TradeRecord[];
-    expect(checkCorrelation("FED-HOLD", "Will Fed hold rates?", positions)).toBe(true);
+    expect(checkCorrelation("FED-HOLD", "Will Fed hold rates?", positions)).toBe(false);
   });
 
   it("detects similar titles", () => {

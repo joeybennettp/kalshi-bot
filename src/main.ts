@@ -9,7 +9,7 @@
 import "dotenv/config";
 import * as crypto from "crypto";
 
-import { initDb, logEvent, getBankrollAfterLastTrade, getConsecutiveLosses } from "./logger.js";
+import { initDb, logEvent, getBankrollAfterLastTrade, getConsecutiveLosses, getOpenPositions } from "./logger.js";
 import { computePace } from "./pacer.js";
 import { scanMarkets } from "./scanner.js";
 import { evaluateCandidates } from "./edge_model.js";
@@ -22,8 +22,10 @@ import { monitorPositions } from "./position_monitor.js";
 import { checkResolutions } from "./resolution_checker.js";
 
 const CYCLE_INTERVAL_MS = 30_000; // 30 seconds
-const BANKROLL_FLOOR = 10.0;
+const BANKROLL_FLOOR_ABSOLUTE = 10.0; // Hard minimum — never go below $10
 const DEFAULT_STARTING_BANKROLL = 100.0;
+const SESSION_LOSS_LIMIT_PCT = 0.30; // Halt if down 30% from session start
+const MAX_OPEN_POSITIONS = 5; // Never hold more than 5 positions at once
 
 function getLocalBankroll(dbPath?: string): number {
   const last = getBankrollAfterLastTrade(dbPath);
@@ -55,15 +57,28 @@ function sleep(ms: number): Promise<void> {
 
 async function runCycle(
   sessionId: string,
+  sessionStartBankroll: number,
   dbPath?: string,
 ): Promise<{ shouldContinue: boolean }> {
   let bankroll = await getCurrentBankroll();
 
-  // Safety: bankroll floor
-  if (bankroll < BANKROLL_FLOOR) {
-    logEvent("HALT", { reason: "BANKROLL_FLOOR", bankroll }, dbPath);
+  // Safety: dynamic bankroll floor (50% of session start, min $10)
+  const bankrollFloor = Math.max(BANKROLL_FLOOR_ABSOLUTE, sessionStartBankroll * 0.5);
+  if (bankroll < bankrollFloor) {
+    logEvent("HALT", { reason: "BANKROLL_FLOOR", bankroll, floor: bankrollFloor, session_start: sessionStartBankroll }, dbPath);
     console.log(
-      `\n[HALT] Bankroll $${bankroll.toFixed(2)} below floor $${BANKROLL_FLOOR.toFixed(2)}. Stopping.`,
+      `\n[HALT] Bankroll $${bankroll.toFixed(2)} below floor $${bankrollFloor.toFixed(2)} (50% of session start $${sessionStartBankroll.toFixed(2)}). Stopping.`,
+    );
+    return { shouldContinue: false };
+  }
+
+  // Safety: session loss limit — halt if down 30% from session start
+  const sessionDrawdown = (sessionStartBankroll - bankroll) / sessionStartBankroll;
+  if (sessionDrawdown >= SESSION_LOSS_LIMIT_PCT) {
+    logEvent("HALT", { reason: "SESSION_LOSS_LIMIT", bankroll, session_start: sessionStartBankroll, drawdown_pct: Math.round(sessionDrawdown * 100) }, dbPath);
+    console.log(
+      `\n[HALT] Session drawdown ${(sessionDrawdown * 100).toFixed(1)}% exceeds ${SESSION_LOSS_LIMIT_PCT * 100}% limit. ` +
+      `Started at $${sessionStartBankroll.toFixed(2)}, now $${bankroll.toFixed(2)}. Stopping.`,
     );
     return { shouldContinue: false };
   }
@@ -133,6 +148,13 @@ async function runCycle(
       return { shouldContinue: false };
     }
     console.log(`[ERROR] Scanner/price fetch failed: ${e}`);
+    return { shouldContinue: true };
+  }
+
+  // Safety: max open positions
+  const openPositions = getOpenPositions(dbPath);
+  if (openPositions.length >= MAX_OPEN_POSITIONS) {
+    console.log(`  At max open positions (${openPositions.length}/${MAX_OPEN_POSITIONS}). Skipping new entries.`);
     return { shouldContinue: true };
   }
 
@@ -233,21 +255,28 @@ async function main(): Promise<void> {
   const sessionId = crypto.randomUUID();
   const bankroll = await getCurrentBankroll();
 
+  const sessionStartBankroll = bankroll;
+  const bankrollFloor = Math.max(BANKROLL_FLOOR_ABSOLUTE, sessionStartBankroll * 0.5);
+
   logEvent("SESSION_START", {
     session_id: sessionId,
     env,
     bankroll,
+    bankroll_floor: bankrollFloor,
+    session_loss_limit_pct: SESSION_LOSS_LIMIT_PCT * 100,
+    max_open_positions: MAX_OPEN_POSITIONS,
   });
 
   console.log(`Session: ${sessionId}`);
   console.log(`Starting bankroll: $${bankroll.toFixed(2)}`);
+  console.log(`Bankroll floor: $${bankrollFloor.toFixed(2)} | Loss limit: ${SESSION_LOSS_LIMIT_PCT * 100}% | Max positions: ${MAX_OPEN_POSITIONS}`);
   console.log(`Cycle interval: ${CYCLE_INTERVAL_MS / 1000}s`);
 
   let shouldContinue = true;
 
   try {
     while (shouldContinue) {
-      const result = await runCycle(sessionId);
+      const result = await runCycle(sessionId, sessionStartBankroll);
       shouldContinue = result.shouldContinue;
 
       if (shouldContinue) {

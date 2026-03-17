@@ -62,8 +62,11 @@ function parseMarket(
   const vol = parseDollar(m["volume_fp"]);
   const lastPrice = parseDollar(m["last_price_dollars"]);
 
-  // Skip markets with zero ask (no liquidity)
+  // Skip markets with zero ask (no liquidity to enter)
   if (yesAsk <= 0 && noAsk <= 0) return null;
+
+  // Skip markets with zero bids (no liquidity to exit)
+  if (yesBid <= 0 && noBid <= 0) return null;
 
   // Category-specific thresholds
   const minOi = config.category === "crypto_15m" ? MIN_OI_15M : MIN_OI_DEFAULT;

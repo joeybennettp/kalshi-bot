@@ -123,9 +123,9 @@ export async function executeTrade(
     };
 
     if (trade.direction === "YES") {
-      orderPayload["yes_price"] = Math.min(99, Math.round(trade.marketPrice * 100) + PRICE_BUFFER_CENTS);
+      orderPayload["yes_price"] = Math.round(trade.marketPrice * 100);
     } else {
-      orderPayload["no_price"] = Math.min(99, Math.round((1 - trade.marketPrice) * 100) + PRICE_BUFFER_CENTS);
+      orderPayload["no_price"] = Math.round((1 - trade.marketPrice) * 100);
     }
 
     const postFn = options?._apiOverride ?? kalshiPost;
