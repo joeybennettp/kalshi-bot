@@ -8,6 +8,8 @@
 
 import "dotenv/config";
 import * as crypto from "crypto";
+import * as fs from "fs";
+import * as path from "path";
 
 import { initDb, logEvent, getBankrollAfterLastTrade, getConsecutiveLosses, getOpenPositions } from "./logger.js";
 import { computePace } from "./pacer.js";
@@ -26,6 +28,8 @@ const BANKROLL_FLOOR_ABSOLUTE = 10.0; // Hard minimum — never go below $10
 const DEFAULT_STARTING_BANKROLL = 100.0;
 const SESSION_LOSS_LIMIT_PCT = 0.30; // Halt if down 30% from session start
 const MAX_OPEN_POSITIONS = 5; // Never hold more than 5 positions at once
+const MODEL_REVIEW_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour cooldown after 3 consecutive losses
+const MODEL_REVIEW_LOCKFILE = path.resolve(__dirname, "..", ".model_review_lock");
 
 function getLocalBankroll(dbPath?: string): number {
   const last = getBankrollAfterLastTrade(dbPath);
@@ -83,11 +87,32 @@ async function runCycle(
     return { shouldContinue: false };
   }
 
-  // Safety: consecutive losses (Rule 8)
+  // Safety: consecutive losses (Rule 8) — cooldown instead of halt to prevent PM2 restart loop
   if (getConsecutiveLosses(dbPath) >= 3) {
-    logEvent("MODEL_REVIEW", { bankroll }, dbPath);
-    console.log("\n[HALT] 3 consecutive losses — MODEL_REVIEW required. Pausing.");
-    return { shouldContinue: false };
+    // Check if lockfile exists with a timestamp
+    if (fs.existsSync(MODEL_REVIEW_LOCKFILE)) {
+      const lockTime = parseInt(fs.readFileSync(MODEL_REVIEW_LOCKFILE, "utf-8").trim(), 10);
+      const elapsed = Date.now() - lockTime;
+      if (elapsed < MODEL_REVIEW_COOLDOWN_MS) {
+        const remaining = Math.ceil((MODEL_REVIEW_COOLDOWN_MS - elapsed) / 60_000);
+        console.log(`  [PAUSED] MODEL_REVIEW cooldown: ${remaining} min remaining. Skipping trading.`);
+        return { shouldContinue: true }; // Stay alive, just skip trading
+      }
+      // Cooldown expired — delete lockfile, allow trading to resume
+      fs.unlinkSync(MODEL_REVIEW_LOCKFILE);
+      console.log("  MODEL_REVIEW cooldown expired. Resuming trading.");
+    } else {
+      // First time hitting 3 losses — create lockfile
+      fs.writeFileSync(MODEL_REVIEW_LOCKFILE, Date.now().toString());
+      logEvent("MODEL_REVIEW", { bankroll, cooldown_minutes: MODEL_REVIEW_COOLDOWN_MS / 60_000 }, dbPath);
+      console.log(`\n[MODEL_REVIEW] 3 consecutive losses — pausing trading for ${MODEL_REVIEW_COOLDOWN_MS / 60_000} minutes.`);
+      return { shouldContinue: true }; // Stay alive, don't halt
+    }
+  } else {
+    // No consecutive losses — clear lockfile if it exists
+    if (fs.existsSync(MODEL_REVIEW_LOCKFILE)) {
+      fs.unlinkSync(MODEL_REVIEW_LOCKFILE);
+    }
   }
 
   // Step 0: Cancel stale resting orders (unfilled after 60s)
