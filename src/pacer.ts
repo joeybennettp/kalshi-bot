@@ -56,7 +56,7 @@ export function computePace(
 
   if (paceRatio < 0.85) {
     paceStatus = "BEHIND";
-    edgeFloor = 0.08; // Tighten when behind pace (CLAUDE.md Rule 2: no chasing)
+    edgeFloor = 0.05; // Same as on-pace — calibration + exposure cap handle risk
   } else if (paceRatio > 1.15) {
     paceStatus = "AHEAD";
     edgeFloor = 0.04;
