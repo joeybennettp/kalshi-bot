@@ -88,7 +88,8 @@ async function runCycle(
   }
 
   // Safety: consecutive losses (Rule 8) — cooldown instead of halt to prevent PM2 restart loop
-  if (getConsecutiveLosses(dbPath) >= 3) {
+  // Threshold is 5 (not 3) because 15m markets resolve in batches — 3 losses in a 2W/3L batch isn't a streak
+  if (getConsecutiveLosses(dbPath) >= 5) {
     if (fs.existsSync(MODEL_REVIEW_LOCKFILE)) {
       const lockContent = fs.readFileSync(MODEL_REVIEW_LOCKFILE, "utf-8").trim();
 
@@ -111,7 +112,7 @@ async function runCycle(
       // First time hitting 3 losses — create lockfile with timestamp
       fs.writeFileSync(MODEL_REVIEW_LOCKFILE, Date.now().toString());
       logEvent("MODEL_REVIEW", { bankroll, cooldown_minutes: MODEL_REVIEW_COOLDOWN_MS / 60_000 }, dbPath);
-      console.log(`\n[MODEL_REVIEW] 3 consecutive losses — pausing trading for ${MODEL_REVIEW_COOLDOWN_MS / 60_000} minutes.`);
+      console.log(`\n[MODEL_REVIEW] 5 consecutive losses — pausing trading for ${MODEL_REVIEW_COOLDOWN_MS / 60_000} minutes.`);
       return { shouldContinue: true };
     }
   } else {
