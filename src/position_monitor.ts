@@ -142,6 +142,15 @@ export async function monitorPositions(
   try {
     const data = await getFn("/portfolio/positions", { limit: "50" });
     const raw = (data["market_positions"] ?? []) as Record<string, unknown>[];
+
+    // Debug: log what Kalshi returns
+    if (raw.length > 0) {
+      console.log(`  [MONITOR] Kalshi returned ${raw.length} position(s)`);
+      for (const p of raw) {
+        console.log(`    pos: ticker=${p["ticker"]} position=${p["position"]} side=${p["side"]}`);
+      }
+    }
+
     livePositions = raw
       .filter((p) => ((p["position"] as number) ?? 0) > 0)
       .map((p) => ({
@@ -173,7 +182,14 @@ export async function monitorPositions(
     const trade = openTrades.find(
       (t) => t.market_id === pos.ticker || t.market_id === pos.market_id,
     );
-    if (!trade || !trade.fill_price) continue;
+    if (!trade) {
+      console.log(`  [MONITOR] No DB match for ${pos.ticker} (market_id=${pos.market_id})`);
+      continue;
+    }
+    if (!trade.fill_price) {
+      console.log(`  [MONITOR] No fill_price for ${pos.ticker} (trade id=${trade.id})`);
+      continue;
+    }
 
     // Fetch current market price
     const prices = await fetchMarketPrices(pos.ticker, { _apiOverride: getFn });
