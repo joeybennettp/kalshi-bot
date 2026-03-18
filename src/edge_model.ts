@@ -18,6 +18,10 @@ import { evaluateSportsCandidate, isWithinOddsRange } from "./sports_edge.js";
 // Max positions in the same category going the same direction
 const MAX_SAME_CATEGORY_DIRECTION = 3;
 
+// Minimum time-to-expiry in ms — don't enter markets about to close
+const MIN_TIME_TO_CLOSE_15M = 7 * 60 * 1000; // 7 minutes for 15m markets
+const MIN_TIME_TO_CLOSE_DEFAULT = 15 * 60 * 1000; // 15 minutes for hourly+
+
 const POLYMARKET_API = "https://gamma-api.polymarket.com";
 
 // Edge source identifiers
@@ -283,6 +287,21 @@ export async function evaluateCandidates(
   const rejected: RejectedCandidate[] = [];
 
   for (const candidate of candidates) {
+    // Time-to-close: skip markets about to expire (model needs time to be right)
+    if (candidate.closeTime) {
+      const closeMs = new Date(candidate.closeTime).getTime();
+      const minTtc = candidate.marketCategory === "crypto_15m" ? MIN_TIME_TO_CLOSE_15M : MIN_TIME_TO_CLOSE_DEFAULT;
+      const remaining = closeMs - Date.now();
+      if (remaining > 0 && remaining < minTtc) {
+        rejected.push({
+          marketId: candidate.marketId,
+          marketTitle: candidate.marketTitle,
+          reason: `TOO_CLOSE_TO_EXPIRY (${Math.round(remaining / 60000)}min left)`,
+        });
+        continue;
+      }
+    }
+
     // Dedup: never enter a market we already hold a position in
     if (openPositions.some((p) => p.market_id === candidate.marketId)) {
       rejected.push({
