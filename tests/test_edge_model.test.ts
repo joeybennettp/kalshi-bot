@@ -130,7 +130,7 @@ describe("countCategoryDirection", () => {
     const positions = [
       { market_id: "KXBTC15M-001", direction: "YES" },
       { market_id: "KXETH15M-002", direction: "YES" },
-      { market_id: "KXSOL15M-003", direction: "NO" },
+      { market_id: "KXETH15M-003", direction: "NO" },
     ] as TradeRecord[];
 
     // 2 crypto_15m YES positions

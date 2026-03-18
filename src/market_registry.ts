@@ -16,16 +16,12 @@ export interface SeriesConfig {
   directional?: boolean;
 }
 
-/** All 15-minute crypto series — new event every 15 minutes, 24/7 */
+/** All 15-minute crypto series — new event every 15 minutes, 24/7
+ *  Only BTC and ETH have backtested edge (54%+ accuracy over 14 days).
+ *  SOL (50.6%), XRP (51.9%), ADA (32%), DOGE (39%), BNB (46%), BCH (untested) — all dropped. */
 const CRYPTO_15M: SeriesConfig[] = [
   { seriesTicker: "KXBTC15M",  category: "crypto_15m", binanceSymbol: "BTCUSDT",  coinId: "bitcoin",      directional: true },
   { seriesTicker: "KXETH15M",  category: "crypto_15m", binanceSymbol: "ETHUSDT",  coinId: "ethereum",     directional: true },
-  { seriesTicker: "KXSOL15M",  category: "crypto_15m", binanceSymbol: "SOLUSDT",  coinId: "solana",       directional: true },
-  { seriesTicker: "KXADA15M",  category: "crypto_15m", binanceSymbol: "ADAUSDT",  coinId: "cardano",      directional: true },
-  { seriesTicker: "KXDOGE15M", category: "crypto_15m", binanceSymbol: "DOGEUSDT", coinId: "dogecoin",     directional: true },
-  { seriesTicker: "KXBNB15M",  category: "crypto_15m", binanceSymbol: "BNBUSDT",  coinId: "binancecoin",  directional: true },
-  { seriesTicker: "KXBCH15M",  category: "crypto_15m", binanceSymbol: "BCHUSDT",  coinId: "bitcoin-cash", directional: true },
-  { seriesTicker: "KXXRP15M",  category: "crypto_15m", binanceSymbol: "XRPUSDT",  coinId: "ripple",       directional: true },
 ];
 
 /** Hourly crypto series — range and directional markets */
