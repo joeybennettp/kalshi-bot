@@ -143,12 +143,10 @@ export async function monitorPositions(
     const data = await getFn("/portfolio/positions", { limit: "50" });
     const raw = (data["market_positions"] ?? []) as Record<string, unknown>[];
 
-    // Debug: log what Kalshi returns
+    // Debug: dump first position to see actual field names
     if (raw.length > 0) {
       console.log(`  [MONITOR] Kalshi returned ${raw.length} position(s)`);
-      for (const p of raw) {
-        console.log(`    pos: ticker=${p["ticker"]} position=${p["position"]} side=${p["side"]}`);
-      }
+      console.log(`    RAW[0]: ${JSON.stringify(raw[0])}`);
     }
 
     livePositions = raw
