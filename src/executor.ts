@@ -136,6 +136,8 @@ export async function executeTrade(
     const orderId = (order["order_id"] as string) ?? "";
     const orderStatus = (order["status"] as string) ?? "";
 
+    let fillPrice = (order["avg_price"] as number) ?? trade.marketPrice;
+
     // If order is resting, wait briefly and re-check for fill
     if (orderStatus === "resting" && orderId) {
       const getFn = kalshiGet;
@@ -151,7 +153,7 @@ export async function executeTrade(
           updateTrade(tradeId, { status: "FAILED", reject_reason: "ORDER_RESTING_UNFILLED" }, dbPath);
           return { tradeId, status: "FAILED", orderId, error: "Order resting (unfilled after 5s)" };
         }
-        // Order filled or partially filled — continue to fill processing below
+        // Order filled or partially filled — update fill price
         const updatedAvgPrice = (updated["avg_price"] as number) ?? 0;
         if (updatedAvgPrice > 0) {
           fillPrice = typeof updatedAvgPrice === "number" && updatedAvgPrice > 1
@@ -167,8 +169,6 @@ export async function executeTrade(
       updateTrade(tradeId, { status: "FAILED", reject_reason: "ORDER_RESTING_UNFILLED" }, dbPath);
       return { tradeId, status: "FAILED", orderId, error: "Order resting (unfilled)" };
     }
-
-    let fillPrice = (order["avg_price"] as number) ?? trade.marketPrice;
     if (typeof fillPrice === "number" && fillPrice > 1) {
       fillPrice = fillPrice / 100; // cents to dollars
     }
