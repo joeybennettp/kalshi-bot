@@ -1,22 +1,27 @@
 /**
- * Position monitor — trailing stop loss on open positions.
+ * Position monitor — profit-locking stop-loss on open positions.
  *
- * Tracks the peak price each position reaches. If the price drops
- * more than TRAILING_STOP_PCT from the peak, sells to lock in profit.
- * Lets winners ride to max payout; only exits on reversals.
+ * Once a position's price reaches 2x the entry price (100% gain),
+ * a profit-lock activates with a floor at 1.5x entry. If the price
+ * drops back to that floor, the position is sold to guarantee profit.
+ *
+ * If a position never reaches 2x entry, it is left to expire naturally.
  */
 
 import { kalshiGet, kalshiPost } from "./kalshi_api.js";
 import { getOpenPositions, updateTrade, logEvent } from "./logger.js";
 
-// Sell if price drops 30% from peak (e.g., peak $0.80 → sell at $0.56)
-const TRAILING_STOP_PCT = 0.30;
+// Profit lock triggers when price reaches 2x entry (100% gain)
+const PROFIT_LOCK_TRIGGER = 2.0;
 
-// Only activate trailing stop once position is profitable (above entry)
-const MIN_PROFIT_TO_ACTIVATE = 0.05; // at least 5 cents above entry
+// Once triggered, floor is set at 1.5x entry (guaranteed 50% profit)
+const PROFIT_LOCK_FLOOR = 1.5;
 
-// In-memory peak price tracker — resets on restart (fine for short-lived contracts)
+// In-memory peak price tracker — used to detect if 2x was ever reached
 const peakPrices = new Map<string, number>();
+
+// Track which positions have had their profit lock activated
+const profitLockActive = new Map<string, boolean>();
 
 export interface LivePosition {
   ticker: string;
@@ -64,10 +69,16 @@ export function calculatePnL(
 }
 
 /**
- * Check trailing stop logic for a position.
+ * Check profit-lock logic for a position.
  * Returns sell reason string if should sell, null if should hold.
+ *
+ * Rules:
+ * - Track peak price for each position
+ * - If peak ever reached 2x entry → profit lock is activated
+ * - Once activated, if current price drops to 1.5x entry → sell
+ * - If never reached 2x entry → hold (let it expire naturally)
  */
-export function checkTrailingStop(
+export function checkProfitLock(
   ticker: string,
   entryPrice: number,
   currentBid: number,
@@ -77,33 +88,41 @@ export function checkTrailingStop(
   const peak = Math.max(prevPeak, currentBid);
   peakPrices.set(ticker, peak);
 
-  // Don't activate until position is meaningfully profitable
-  if (currentBid < entryPrice + MIN_PROFIT_TO_ACTIVATE) {
+  const triggerPrice = entryPrice * PROFIT_LOCK_TRIGGER;
+  const floorPrice = entryPrice * PROFIT_LOCK_FLOOR;
+
+  // Check if profit lock should activate (peak ever reached 2x entry)
+  if (peak >= triggerPrice && !profitLockActive.get(ticker)) {
+    profitLockActive.set(ticker, true);
+  }
+
+  // If profit lock is not active, hold
+  if (!profitLockActive.get(ticker)) {
     return null;
   }
 
-  // Check if price has dropped enough from peak
-  const dropFromPeak = (peak - currentBid) / peak;
-  if (dropFromPeak >= TRAILING_STOP_PCT) {
-    return `TRAILING_STOP (peak=$${peak.toFixed(2)}, drop=${(dropFromPeak * 100).toFixed(0)}%>${(TRAILING_STOP_PCT * 100).toFixed(0)}%)`;
+  // Profit lock is active — check if price dropped to floor
+  if (currentBid <= floorPrice) {
+    return `PROFIT_LOCK (entry=$${entryPrice.toFixed(2)}, peak=$${peak.toFixed(2)}, floor=$${floorPrice.toFixed(2)})`;
   }
 
   return null;
 }
 
 /**
- * Clean up peak tracking for positions that no longer exist.
+ * Clean up peak tracking and profit lock state for positions that no longer exist.
  */
 export function cleanupPeaks(activeTickers: Set<string>): void {
   for (const ticker of peakPrices.keys()) {
     if (!activeTickers.has(ticker)) {
       peakPrices.delete(ticker);
+      profitLockActive.delete(ticker);
     }
   }
 }
 
 /**
- * Monitor all open positions with trailing stop.
+ * Monitor all open positions with profit-lock stop-loss.
  * Returns the number of positions closed.
  */
 export async function monitorPositions(
@@ -141,7 +160,7 @@ export async function monitorPositions(
     return 0;
   }
 
-  // Clean up peaks for expired positions
+  // Clean up state for expired positions
   const activeTickers = new Set(livePositions.map((p) => p.ticker));
   cleanupPeaks(activeTickers);
 
@@ -166,8 +185,19 @@ export async function monitorPositions(
 
     if (currentBid <= 0) continue;
 
-    // Check trailing stop
-    const sellReason = checkTrailingStop(pos.ticker, entryPrice, currentBid);
+    const triggerPrice = entryPrice * PROFIT_LOCK_TRIGGER;
+    const floorPrice = entryPrice * PROFIT_LOCK_FLOOR;
+    const isLocked = profitLockActive.get(pos.ticker) || false;
+    const peak = peakPrices.get(pos.ticker) ?? currentBid;
+
+    // Log position status each cycle so we can verify it's working
+    console.log(
+      `  [MONITOR] ${pos.ticker}: entry=$${entryPrice.toFixed(2)} bid=$${currentBid.toFixed(2)} peak=$${Math.max(peak, currentBid).toFixed(2)} ` +
+      `trigger=$${triggerPrice.toFixed(2)} floor=$${floorPrice.toFixed(2)} lock=${isLocked ? "ACTIVE" : "waiting"}`,
+    );
+
+    // Check profit-lock stop
+    const sellReason = checkProfitLock(pos.ticker, entryPrice, currentBid);
     if (!sellReason) continue;
 
     // Place sell order
@@ -191,7 +221,7 @@ export async function monitorPositions(
       const orderStatus = (order["status"] as string) ?? "";
 
       if (orderStatus === "resting") {
-        console.log(`  Trailing stop order resting (unfilled): ${pos.ticker}`);
+        console.log(`  Profit-lock order resting (unfilled): ${pos.ticker}`);
         continue;
       }
 
@@ -212,7 +242,7 @@ export async function monitorPositions(
       }
 
       logEvent(
-        "TRAILING_STOP",
+        "PROFIT_LOCK_EXIT",
         {
           session_id: sessionId,
           market_id: pos.ticker,
@@ -221,6 +251,7 @@ export async function monitorPositions(
           entry_price: entryPrice,
           exit_price: currentBid,
           peak_price: peakPrices.get(pos.ticker) ?? currentBid,
+          floor_price: entryPrice * PROFIT_LOCK_FLOOR,
           pnl: Math.round(pnl * 100) / 100,
         },
         dbPath,
@@ -228,13 +259,14 @@ export async function monitorPositions(
 
       const pnlSign = pnl >= 0 ? "+" : "";
       console.log(
-        `  TRAILING STOP: ${pos.ticker} (${pos.side.toUpperCase()}) ` +
+        `  PROFIT LOCK: ${pos.ticker} (${pos.side.toUpperCase()}) ` +
         `entry=$${entryPrice.toFixed(2)} peak=$${(peakPrices.get(pos.ticker) ?? currentBid).toFixed(2)} → exit=$${currentBid.toFixed(2)} ` +
         `P&L=${pnlSign}$${pnl.toFixed(2)}`,
       );
 
-      // Remove from peak tracking
+      // Remove from tracking
       peakPrices.delete(pos.ticker);
+      profitLockActive.delete(pos.ticker);
       closed++;
     } catch (e) {
       console.log(`[WARN] Failed to sell ${pos.ticker}: ${e instanceof Error ? e.message : e}`);

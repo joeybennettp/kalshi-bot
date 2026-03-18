@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
 import os from "os";
-import { computeEv, checkCorrelation, evaluateCandidates } from "../src/edge_model.js";
+import { computeEv, getCategoryFromMarketId, countCategoryDirection, evaluateCandidates } from "../src/edge_model.js";
 import { initDb, logTrade, type TradeRecord } from "../src/logger.js";
 import type { CandidateMarket } from "../src/scanner.js";
 
@@ -99,29 +99,80 @@ describe("computeEv", () => {
   });
 });
 
-describe("checkCorrelation", () => {
-  it("allows same market_id re-entry", () => {
-    const positions = [{ market_id: "FED-HOLD", market_title: "Will Fed hold rates?" }] as TradeRecord[];
-    expect(checkCorrelation("FED-HOLD", "Will Fed hold rates?", positions)).toBe(false);
+describe("getCategoryFromMarketId", () => {
+  it("identifies crypto_15m from market id", () => {
+    expect(getCategoryFromMarketId("KXBTC15M-26MAR162045-45-UP")).toBe("crypto_15m");
   });
 
-  it("detects similar titles", () => {
-    const positions = [{
-      market_id: "FED-HOLD",
-      market_title: "Will the Federal Reserve hold interest rates?",
-    }] as TradeRecord[];
-    expect(
-      checkCorrelation("FED-RATE-2026", "Will Federal Reserve raise interest rates?", positions),
-    ).toBe(true);
+  it("identifies crypto_15m for ETH", () => {
+    expect(getCategoryFromMarketId("KXETH15M-26MAR162045-45-UP")).toBe("crypto_15m");
   });
 
-  it("allows different markets", () => {
-    const positions = [{ market_id: "FED-HOLD", market_title: "Will Fed hold rates?" }] as TradeRecord[];
-    expect(checkCorrelation("CPI-ABOVE-3", "Will CPI come in above 3%?", positions)).toBe(false);
+  it("identifies crypto_hourly", () => {
+    expect(getCategoryFromMarketId("KXBTCD-26MAR162045-B100000")).toBe("crypto_hourly");
   });
 
-  it("allows when no open positions", () => {
-    expect(checkCorrelation("ANY-MKT", "Any market title", [])).toBe(false);
+  it("identifies sports", () => {
+    expect(getCategoryFromMarketId("KXNBA-26MAR-LAKERS")).toBe("sports");
+  });
+
+  it("identifies financial_hourly", () => {
+    expect(getCategoryFromMarketId("KXINXU-26MAR162045-B5000")).toBe("financial_hourly");
+  });
+
+  it("returns null for unknown market", () => {
+    expect(getCategoryFromMarketId("UNKNOWN-MKT-123")).toBeNull();
+  });
+});
+
+describe("countCategoryDirection", () => {
+  it("counts matching open positions", () => {
+    const positions = [
+      { market_id: "KXBTC15M-001", direction: "YES" },
+      { market_id: "KXETH15M-002", direction: "YES" },
+      { market_id: "KXSOL15M-003", direction: "NO" },
+    ] as TradeRecord[];
+
+    // 2 crypto_15m YES positions
+    expect(countCategoryDirection("crypto_15m", "YES", positions, [])).toBe(2);
+    // 1 crypto_15m NO position
+    expect(countCategoryDirection("crypto_15m", "NO", positions, [])).toBe(1);
+  });
+
+  it("counts approved signals too", () => {
+    const positions = [
+      { market_id: "KXBTC15M-001", direction: "YES" },
+    ] as TradeRecord[];
+
+    const signals = [
+      { marketId: "KXETH15M-002", direction: "YES" as const, marketTitle: "", pEstimate: 0, marketPrice: 0, evPerDollar: 0, edgeSource: "", edgeRationale: "" },
+    ];
+
+    // 1 from positions + 1 from signals = 2
+    expect(countCategoryDirection("crypto_15m", "YES", positions, signals)).toBe(2);
+  });
+
+  it("does not count different categories", () => {
+    const positions = [
+      { market_id: "KXNBA-001", direction: "YES" },
+      { market_id: "KXBTC15M-002", direction: "YES" },
+    ] as TradeRecord[];
+
+    // Only 1 crypto_15m, not the sports one
+    expect(countCategoryDirection("crypto_15m", "YES", positions, [])).toBe(1);
+  });
+
+  it("does not count different directions", () => {
+    const positions = [
+      { market_id: "KXBTC15M-001", direction: "NO" },
+      { market_id: "KXETH15M-002", direction: "NO" },
+    ] as TradeRecord[];
+
+    expect(countCategoryDirection("crypto_15m", "YES", positions, [])).toBe(0);
+  });
+
+  it("returns 0 with no positions", () => {
+    expect(countCategoryDirection("crypto_15m", "YES", [], [])).toBe(0);
   });
 });
 

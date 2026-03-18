@@ -10,8 +10,13 @@
 import { getConsecutiveLosses, getOpenPositions, hasRecentLoss, hasRecentFailedOrder, type TradeRecord } from "./logger.js";
 import type { CandidateMarket } from "./scanner.js";
 import type { PriceData } from "./price_feeds.js";
+import type { MarketCategory } from "./market_registry.js";
+import { MARKET_REGISTRY } from "./market_registry.js";
 import { analyzeTrend } from "./trend_analysis.js";
 import { evaluateSportsCandidate, isWithinOddsRange } from "./sports_edge.js";
+
+// Max positions in the same category going the same direction
+const MAX_SAME_CATEGORY_DIRECTION = 3;
 
 const POLYMARKET_API = "https://gamma-api.polymarket.com";
 
@@ -61,36 +66,47 @@ export function computeEv(
   return Math.round(ev * 1_000_000) / 1_000_000;
 }
 
-export function checkCorrelation(
-  marketId: string,
-  marketTitle: string,
-  openPositions: TradeRecord[],
-): boolean {
-  for (const pos of openPositions) {
-    // Same market = allow re-entry (add to position if edge grows)
-    if (pos.market_id === marketId) continue;
-
-    // Words to ignore: stop words + common market structure words
-    const ignoreWords = new Set([
-      "the", "a", "an", "will", "be", "to", "in", "of", "at", "on", "is",
-      "price", "up", "down", "above", "below", "next", "mins", "minutes",
-      "hour", "hours", "first", "half", "winner", "or", "more", "less",
-      "higher", "lower", "by", "end", "close", "open", "than", "and",
-    ]);
-    const posWords = new Set(
-      pos.market_title.toLowerCase().split(/\s+/).filter((w) => !ignoreWords.has(w) && w.length > 2),
-    );
-    const newWords = new Set(
-      marketTitle.toLowerCase().split(/\s+/).filter((w) => !ignoreWords.has(w) && w.length > 2),
-    );
-
-    let overlap = 0;
-    for (const w of posWords) {
-      if (newWords.has(w)) overlap++;
+/**
+ * Look up a market's category from its market_id (e.g. "KXBTC15M-..." → "crypto_15m").
+ */
+export function getCategoryFromMarketId(marketId: string): MarketCategory | null {
+  for (const config of MARKET_REGISTRY) {
+    if (marketId.startsWith(config.seriesTicker)) {
+      return config.category;
     }
-    if (overlap >= 3) return true;
   }
-  return false;
+  return null;
+}
+
+/**
+ * Count how many open positions + already-approved signals share the same
+ * category and direction as the candidate.
+ */
+export function countCategoryDirection(
+  category: MarketCategory,
+  direction: "YES" | "NO",
+  openPositions: TradeRecord[],
+  approvedSignals: TradeSignal[],
+): number {
+  let count = 0;
+
+  // Count existing open positions
+  for (const pos of openPositions) {
+    const posCategory = getCategoryFromMarketId(pos.market_id);
+    if (posCategory === category && pos.direction === direction) {
+      count++;
+    }
+  }
+
+  // Count signals already approved this cycle
+  for (const sig of approvedSignals) {
+    const sigCategory = getCategoryFromMarketId(sig.marketId);
+    if (sigCategory === category && sig.direction === direction) {
+      count++;
+    }
+  }
+
+  return count;
 }
 
 // ──────────────────────── Crypto Trend Edge ────────────────────────
@@ -267,16 +283,6 @@ export async function evaluateCandidates(
   const rejected: RejectedCandidate[] = [];
 
   for (const candidate of candidates) {
-    // Correlation check (Rule 5)
-    if (checkCorrelation(candidate.marketId, candidate.marketTitle, openPositions)) {
-      rejected.push({
-        marketId: candidate.marketId,
-        marketTitle: candidate.marketTitle,
-        reason: "CORRELATED_POSITION",
-      });
-      continue;
-    }
-
     // No-chasing rule (Rule 2): 15-minute cooldown after loss on similar market
     if (hasRecentLoss(candidate.marketTitle, 900_000, dbPath)) {
       rejected.push({
@@ -310,7 +316,9 @@ export async function evaluateCandidates(
       continue;
     }
 
-    // Route by category
+    // Route by category — edge model determines direction, then we check category limits
+    let signal: TradeSignal | null = null;
+
     if (candidate.marketCategory === "crypto_15m" && candidate.directional) {
       const symbol = candidate.binanceSymbol;
       if (!symbol) {
@@ -324,7 +332,7 @@ export async function evaluateCandidates(
           if (typeof result === "string") {
             rejectReason = result;
           } else {
-            signals.push(result); foundEdge = true;
+            signal = result;
           }
         }
       }
@@ -341,29 +349,39 @@ export async function evaluateCandidates(
           if (typeof result === "string") {
             rejectReason = result;
           } else {
-            signals.push(result); foundEdge = true;
+            signal = result;
           }
         }
       }
     } else if (candidate.marketCategory === "sports") {
-      // Check odds range
       if (!isWithinOddsRange(candidate.yesPrice, candidate.noPrice)) {
         rejectReason = `OUTSIDE_ODDS_RANGE (yes=${(candidate.yesPrice * 100).toFixed(0)}c)`;
       } else {
-        const signal = evaluateSportsCandidate(candidate, edgeFloor);
-        if (signal) { signals.push(signal); foundEdge = true; }
-        else { rejectReason = "SPORTS_NO_EDGE"; }
+        signal = evaluateSportsCandidate(candidate, edgeFloor);
+        if (!signal) rejectReason = "SPORTS_NO_EDGE";
       }
     } else if (candidate.marketCategory === "financial_hourly") {
-      // Polymarket arbitrage
       const polyProb = await fetchPolymarketOdds(candidate.marketTitle);
       if (polyProb == null) {
         rejectReason = "NO_POLYMARKET_MATCH";
       } else {
-        const signal = evaluateArbitrage(candidate, edgeFloor, polyProb);
-        if (signal) { signals.push(signal); foundEdge = true; }
-        else { rejectReason = `ARB_SPREAD_TOO_SMALL (poly=${(polyProb * 100).toFixed(0)}% vs kalshi=${(candidate.yesPrice * 100).toFixed(0)}%)`; }
+        signal = evaluateArbitrage(candidate, edgeFloor, polyProb);
+        if (!signal) rejectReason = `ARB_SPREAD_TOO_SMALL (poly=${(polyProb * 100).toFixed(0)}% vs kalshi=${(candidate.yesPrice * 100).toFixed(0)}%)`;
       }
+    }
+
+    // Rule 5: Category + direction correlation limit (max 3 same category + same direction)
+    if (signal) {
+      const sameCount = countCategoryDirection(candidate.marketCategory, signal.direction, openPositions, signals);
+      if (sameCount >= MAX_SAME_CATEGORY_DIRECTION) {
+        rejectReason = `CATEGORY_LIMIT (${sameCount} ${candidate.marketCategory} ${signal.direction} already open)`;
+        signal = null;
+      }
+    }
+
+    if (signal) {
+      signals.push(signal);
+      foundEdge = true;
     }
 
     if (!foundEdge) {
