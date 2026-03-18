@@ -143,20 +143,18 @@ export async function monitorPositions(
     const data = await getFn("/portfolio/positions", { limit: "50" });
     const raw = (data["market_positions"] ?? []) as Record<string, unknown>[];
 
-    // Debug: dump first position to see actual field names
-    if (raw.length > 0) {
-      console.log(`  [MONITOR] Kalshi returned ${raw.length} position(s)`);
-      console.log(`    RAW[0]: ${JSON.stringify(raw[0])}`);
-    }
-
     livePositions = raw
-      .filter((p) => ((p["position"] as number) ?? 0) > 0)
+      .filter((p) => parseFloat((p["position_fp"] as string) ?? "0") > 0)
       .map((p) => ({
         ticker: (p["ticker"] as string) ?? "",
-        market_id: (p["market_id"] as string) ?? (p["ticker"] as string) ?? "",
-        position: (p["position"] as number) ?? 0,
-        side: (p["side"] as string) ?? "",
+        market_id: (p["ticker"] as string) ?? "",
+        position: parseFloat((p["position_fp"] as string) ?? "0"),
+        side: "", // Kalshi doesn't return side — we'll get it from our DB
       }));
+
+    if (livePositions.length > 0) {
+      console.log(`  [MONITOR] ${livePositions.length} live position(s) from Kalshi`);
+    }
   } catch (e) {
     console.log(`[WARN] Failed to fetch positions: ${e instanceof Error ? e.message : e}`);
     return 0;
@@ -193,7 +191,8 @@ export async function monitorPositions(
     const prices = await fetchMarketPrices(pos.ticker, { _apiOverride: getFn });
     if (!prices) continue;
 
-    const isYes = pos.side.toLowerCase() === "yes";
+    // Get side from DB trade record (Kalshi API doesn't return side)
+    const isYes = trade.direction.toUpperCase() === "YES";
     const currentBid = isYes ? prices.yesBid : prices.noBid;
     const entryPrice = trade.fill_price;
 
@@ -219,7 +218,7 @@ export async function monitorPositions(
       const orderPayload: Record<string, unknown> = {
         ticker: pos.ticker,
         action: "sell",
-        side: pos.side.toLowerCase(),
+        side: trade.direction.toLowerCase(),
         type: "limit",
         count: pos.position,
       };
@@ -260,7 +259,7 @@ export async function monitorPositions(
         {
           session_id: sessionId,
           market_id: pos.ticker,
-          side: pos.side,
+          side: trade.direction,
           contracts: pos.position,
           entry_price: entryPrice,
           exit_price: currentBid,
@@ -273,7 +272,7 @@ export async function monitorPositions(
 
       const pnlSign = pnl >= 0 ? "+" : "";
       console.log(
-        `  PROFIT LOCK: ${pos.ticker} (${pos.side.toUpperCase()}) ` +
+        `  PROFIT LOCK: ${pos.ticker} (${trade.direction.toUpperCase()}) ` +
         `entry=$${entryPrice.toFixed(2)} peak=$${(peakPrices.get(pos.ticker) ?? currentBid).toFixed(2)} → exit=$${currentBid.toFixed(2)} ` +
         `P&L=${pnlSign}$${pnl.toFixed(2)}`,
       );
