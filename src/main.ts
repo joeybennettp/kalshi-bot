@@ -28,6 +28,7 @@ const BANKROLL_FLOOR_ABSOLUTE = 10.0; // Hard minimum — never go below $10
 const DEFAULT_STARTING_BANKROLL = 100.0;
 const SESSION_LOSS_LIMIT_PCT = 0.30; // Halt if down 30% from session start
 const MAX_OPEN_POSITIONS = 5; // Never hold more than 5 positions at once
+const MAX_TOTAL_EXPOSURE_PCT = 0.50; // Never commit more than 50% of bankroll to open positions
 const MODEL_REVIEW_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour cooldown after 3 consecutive losses
 const MODEL_REVIEW_LOCKFILE = path.resolve(__dirname, "..", ".model_review_lock");
 const STOP_FILE = path.resolve(__dirname, "..", ".stop_trading");
@@ -270,8 +271,22 @@ async function runCycle(
 
   console.log(`  Sized trades: ${sized.length}`);
 
+  // Step 4.5: Total exposure cap — never commit more than 50% of bankroll
+  const openPositions = getOpenPositions(dbPath);
+  let currentExposure = openPositions.reduce((sum, p) => sum + p.position_size, 0);
+  const maxExposure = bankroll * MAX_TOTAL_EXPOSURE_PCT;
+
   // Step 5: Executor — fully autonomous, no approval needed
   for (const trade of sized) {
+    // Check exposure cap before each trade
+    if (currentExposure + trade.positionSize > maxExposure) {
+      console.log(
+        `  Trade SKIPPED (exposure cap): ${trade.marketTitle} (${trade.direction}) $${trade.positionSize.toFixed(2)} ` +
+        `| exposure $${currentExposure.toFixed(2)}/$${maxExposure.toFixed(2)}`,
+      );
+      continue;
+    }
+
     try {
       const result = await executeTrade(trade, sessionId, bankroll, {
         dbPath,
@@ -282,6 +297,7 @@ async function runCycle(
 
       if (result.status === "EXECUTED") {
         bankroll = result.bankrollAfter ?? bankroll;
+        currentExposure += trade.positionSize;
       }
     } catch (e) {
       if (e instanceof Error && e.message.includes("HALT")) {
