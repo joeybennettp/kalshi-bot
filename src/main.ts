@@ -182,10 +182,20 @@ async function runCycle(
     return { shouldContinue: true };
   }
 
-  // Safety: max open positions
-  const openPositions = getOpenPositions(dbPath);
-  if (openPositions.length >= MAX_OPEN_POSITIONS) {
-    console.log(`  At max open positions (${openPositions.length}/${MAX_OPEN_POSITIONS}). Skipping new entries.`);
+  // Safety: max open positions — use Kalshi live count (DB can be stale)
+  let livePositionCount = 0;
+  try {
+    const posData = await kalshiGet("/portfolio/positions", { limit: "50" });
+    const rawPos = (posData["market_positions"] ?? []) as Record<string, unknown>[];
+    livePositionCount = rawPos.filter(
+      (p) => parseFloat((p["position_fp"] as string) ?? "0") > 0,
+    ).length;
+  } catch {
+    // Fallback to DB count if API fails
+    livePositionCount = getOpenPositions(dbPath).length;
+  }
+  if (livePositionCount >= MAX_OPEN_POSITIONS) {
+    console.log(`  At max open positions (${livePositionCount}/${MAX_OPEN_POSITIONS}). Skipping new entries.`);
     return { shouldContinue: true };
   }
 
