@@ -153,7 +153,7 @@ export async function monitorPositions(
       }));
 
     if (livePositions.length > 0) {
-      console.log(`  [MONITOR] ${livePositions.length} live position(s) from Kalshi`);
+      console.log(`  [MONITOR] ${livePositions.length} live position(s)`);
     }
   } catch (e) {
     console.log(`[WARN] Failed to fetch positions: ${e instanceof Error ? e.message : e}`);

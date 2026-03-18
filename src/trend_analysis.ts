@@ -256,7 +256,13 @@ export function analyzeTrend(
   // outperforms trend-following. Backtested over 14 days (4K+ predictions):
   // original = 43% accuracy, flipped = 57% accuracy.
   const rawPUp = computeTrendProbability(indicators);
-  const pUp = timeframe === "15m" ? 1 - rawPUp : rawPUp;
+  const flipped = timeframe === "15m" ? 1 - rawPUp : rawPUp;
+
+  // Calibration: raw output [0.30, 0.70] is overconfident — actual accuracy is ~53%.
+  // Compress toward 0.50 so Kelly sizing matches real edge.
+  // Factor 0.35 maps [0.30, 0.70] → [0.43, 0.57].
+  const CALIBRATION_FACTOR = 0.35;
+  const pUp = 0.50 + (flipped - 0.50) * CALIBRATION_FACTOR;
 
   // Compute confidence: how many indicators agree
   let bullishCount = 0;
@@ -270,8 +276,8 @@ export function analyzeTrend(
   const confidence = maxAgree / 4; // 0.25 to 1.0
 
   let direction: "UP" | "DOWN" | "NEUTRAL";
-  if (pUp > 0.54) direction = "UP";
-  else if (pUp < 0.46) direction = "DOWN";
+  if (pUp > 0.52) direction = "UP";
+  else if (pUp < 0.48) direction = "DOWN";
   else direction = "NEUTRAL";
 
   // Build rationale

@@ -30,6 +30,7 @@ const SESSION_LOSS_LIMIT_PCT = 0.30; // Halt if down 30% from session start
 const MAX_OPEN_POSITIONS = 5; // Never hold more than 5 positions at once
 const MODEL_REVIEW_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour cooldown after 3 consecutive losses
 const MODEL_REVIEW_LOCKFILE = path.resolve(__dirname, "..", ".model_review_lock");
+const STOP_FILE = path.resolve(__dirname, "..", ".stop_trading");
 
 function getLocalBankroll(dbPath?: string): number {
   const last = getBankrollAfterLastTrade(dbPath);
@@ -64,6 +65,13 @@ async function runCycle(
   sessionStartBankroll: number,
   dbPath?: string,
 ): Promise<{ shouldContinue: boolean }> {
+  // Kill switch: check for .stop_trading file (remote shutdown via phone)
+  if (fs.existsSync(STOP_FILE)) {
+    console.log("\n[STOPPED] .stop_trading file detected — pausing all trading.");
+    console.log("  Remove the file to resume: rm .stop_trading");
+    return { shouldContinue: true };
+  }
+
   let bankroll = await getCurrentBankroll();
 
   // Safety: dynamic bankroll floor (50% of session start, min $10)
@@ -139,18 +147,18 @@ async function runCycle(
     bankroll = await getCurrentBankroll();
   }
 
-  // Step 0.5: Monitor positions — sell profitable ones
-  const closedCount = await monitorPositions(sessionId, bankroll, dbPath);
-  if (closedCount > 0) {
-    console.log(`  Closed ${closedCount} profitable position(s)`);
-    bankroll = await getCurrentBankroll();
-  }
-
   // Step 1: Pacer
   const tradingDay = getTradingDay();
   console.log(
     `\n--- Cycle Start | Bankroll: $${bankroll.toFixed(2)} | Day ${tradingDay} ---`,
   );
+
+  // Step 1.5: Monitor positions — show live position status + profit-lock
+  const closedCount = await monitorPositions(sessionId, bankroll, dbPath);
+  if (closedCount > 0) {
+    console.log(`  Closed ${closedCount} profitable position(s)`);
+    bankroll = await getCurrentBankroll();
+  }
 
   let pace;
   try {
