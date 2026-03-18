@@ -283,6 +283,16 @@ export async function evaluateCandidates(
   const rejected: RejectedCandidate[] = [];
 
   for (const candidate of candidates) {
+    // Dedup: never enter a market we already hold a position in
+    if (openPositions.some((p) => p.market_id === candidate.marketId)) {
+      rejected.push({
+        marketId: candidate.marketId,
+        marketTitle: candidate.marketTitle,
+        reason: "ALREADY_HOLDING_POSITION",
+      });
+      continue;
+    }
+
     // No-chasing rule (Rule 2): 15-minute cooldown after loss on similar market
     if (hasRecentLoss(candidate.marketTitle, 900_000, dbPath)) {
       rejected.push({
