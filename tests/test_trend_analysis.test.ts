@@ -209,7 +209,9 @@ describe("computeTrendProbability", () => {
 });
 
 describe("analyzeTrend", () => {
-  it("produces valid signal for uptrending data", () => {
+  it("produces mean-reversion DOWN signal for uptrending 15m data", () => {
+    // On 15m timeframe, trend indicators are flipped for mean-reversion.
+    // Uptrending data → model predicts reversion → DOWN.
     const klines1m = Array.from({ length: 60 }, (_, i) => makeKline(100 + i * 0.5));
     const klines5m = Array.from({ length: 50 }, (_, i) => makeKline(100 + i * 2));
     const klines15m = Array.from({ length: 30 }, (_, i) => makeKline(100 + i * 5));
@@ -229,13 +231,14 @@ describe("analyzeTrend", () => {
     };
 
     const signal = analyzeTrend(priceData, "15m");
-    expect(signal.direction).toBe("UP");
-    expect(signal.pUp).toBeGreaterThan(0.5);
+    expect(signal.direction).toBe("DOWN");
+    expect(signal.pUp).toBeLessThan(0.5);
     expect(signal.confidence).toBeGreaterThan(0);
     expect(signal.rationale).toBeTruthy();
   });
 
-  it("produces DOWN signal for downtrending data", () => {
+  it("produces mean-reversion UP signal for downtrending 15m data", () => {
+    // Downtrending data → model predicts bounce → UP.
     const klines1m = Array.from({ length: 60 }, (_, i) => makeKline(200 - i * 0.5));
     const klines5m = Array.from({ length: 50 }, (_, i) => makeKline(200 - i * 2));
     const klines15m = Array.from({ length: 30 }, (_, i) => makeKline(200 - i * 5));
@@ -255,7 +258,7 @@ describe("analyzeTrend", () => {
     };
 
     const signal = analyzeTrend(priceData, "15m");
-    expect(signal.direction).toBe("DOWN");
-    expect(signal.pUp).toBeLessThan(0.5);
+    expect(signal.direction).toBe("UP");
+    expect(signal.pUp).toBeGreaterThan(0.5);
   });
 });

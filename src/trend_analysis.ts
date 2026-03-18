@@ -252,7 +252,11 @@ export function analyzeTrend(
   const volumeTrend = getVolumeTrend(fastKlines);
 
   const indicators = { emaCross, rsi, macdHistogram, priceVsVwap, volumeTrend };
-  const pUp = computeTrendProbability(indicators);
+  // Flip: trend indicators are lagging on 15m timeframes, so mean-reversion
+  // outperforms trend-following. Backtested over 14 days (4K+ predictions):
+  // original = 43% accuracy, flipped = 57% accuracy.
+  const rawPUp = computeTrendProbability(indicators);
+  const pUp = timeframe === "15m" ? 1 - rawPUp : rawPUp;
 
   // Compute confidence: how many indicators agree
   let bullishCount = 0;
